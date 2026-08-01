@@ -44,6 +44,6 @@ adb connect DEVICE_IP:5555
 
 ## LSPosed 拦截模块
 
-`xposed-module/` 是一个只作用于 `com.android.quicksearchbox` 的 LSPosed 模块。它在 `searchengineNew.json` 写入文件前改写云控内容，并拦截默认引擎 SharedPreferences 写入。模块不拦截其他应用，也不需要改动 QuickSearchBox APK。
+`xposed-module/` 是一个只作用于 `com.android.quicksearchbox` 的 LSPosed 模块。它在 `searchengineNew.json` 写入前、JSON 读取解析时改写云控内容，并拦截默认引擎 SharedPreferences 写入。模块不拦截其他应用，也不需要改动 QuickSearchBox APK；因此磁盘上的旧 JSON 即使仍显示 360，也不影响 QuickSearchBox 使用 Google。
 
-GitHub Actions 会构建未签名 APK，产物位于 Actions 的 artifact 中。安装后在 LSPosed 中启用模块，并只勾选 `com.android.quicksearchbox`，重启该应用或重启手机。
+GitHub Actions 会构建并签名 APK，产物位于 Actions 的 artifact 中。安装后在 LSPosed 中启用模块，并只勾选 `com.android.quicksearchbox`，重启该应用或重启手机。
