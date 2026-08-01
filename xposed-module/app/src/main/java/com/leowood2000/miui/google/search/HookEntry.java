@@ -9,8 +9,10 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.nio.channels.FileChannel;
 import java.util.Map;
 import java.util.WeakHashMap;
 
@@ -31,6 +33,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
     private static final Map<FileOutputStream, ByteArrayOutputStream> TARGET_STREAMS =
             new WeakHashMap<>();
     private static final ThreadLocal<Boolean> RAW_WRITE = new ThreadLocal<>();
+    private static final ThreadLocal<Boolean> JSON_REWRITING = new ThreadLocal<>();
     private static Method RAW_WRITE_METHOD;
 
     @Override
@@ -57,7 +60,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 } else if (param.args.length > 0 && param.args[0] instanceof File) {
                     path = ((File) param.args[0]).getAbsolutePath();
                 }
-                if (path != null && path.contains("searchengineNew.json")) {
+                if (isTargetConfigPath(path)) {
                     synchronized (TARGET_STREAMS) {
                         TARGET_STREAMS.put((FileOutputStream) param.thisObject, new ByteArrayOutputStream());
                     }
@@ -108,12 +111,23 @@ public final class HookEntry implements IXposedHookLoadPackage {
                         ByteArrayOutputStream buffer;
                         synchronized (TARGET_STREAMS) { buffer = TARGET_STREAMS.remove(stream); }
                         if (buffer == null || Boolean.TRUE.equals(RAW_WRITE.get())) return;
-                        byte[] output = rewriteSearchConfig(buffer.toByteArray());
+                        byte[] original = buffer.toByteArray();
+                        byte[] output = rewriteSearchConfig(original);
                         try {
                             RAW_WRITE.set(Boolean.TRUE);
-                            RAW_WRITE_METHOD.invoke(stream, output, 0, output.length);
+                            invokeOriginalWrite(stream, output);
                         } catch (Throwable t) {
-                            XposedBridge.log("[MIUI Google Search Hook] write failed: " + t);
+                            XposedBridge.log("[MIUI Google Search Hook] rewritten write failed: " + t);
+                            try {
+                                resetStream(stream);
+                                invokeOriginalWrite(stream, original);
+                            } catch (Throwable restoreError) {
+                                XposedBridge.log("[MIUI Google Search Hook] original write restore failed: "
+                                        + restoreError);
+                                param.setThrowable(new IOException(
+                                        "MIUI Google Search Hook could not write search config",
+                                        restoreError));
+                            }
                         } finally {
                             RAW_WRITE.remove();
                         }
@@ -127,10 +141,36 @@ public final class HookEntry implements IXposedHookLoadPackage {
         }
     }
 
+    private static boolean isTargetConfigPath(String path) {
+        if (path == null) return false;
+        File file = new File(path);
+        String normalized = file.getAbsolutePath().replace('\\', '/');
+        return "searchengineNew.json".equals(file.getName())
+                && normalized.contains(
+                "/data/user/0/com.android.quicksearchbox/files/data/websearch/");
+    }
+
+    private static void invokeOriginalWrite(FileOutputStream stream, byte[] data) throws Throwable {
+        XposedBridge.invokeOriginalMethod(
+                RAW_WRITE_METHOD,
+                stream,
+                new Object[]{data, 0, data.length});
+    }
+
+    private static void resetStream(FileOutputStream stream) throws IOException {
+        FileChannel channel = stream.getChannel();
+        if (channel != null) {
+            channel.position(0);
+            channel.truncate(0);
+        }
+    }
+
     private static byte[] rewriteSearchConfig(byte[] input) {
+        if (Boolean.TRUE.equals(JSON_REWRITING.get())) return input;
         String text = new String(input, StandardCharsets.UTF_8);
         if (!text.contains("searchEngineName") || !text.trim().startsWith("{")) return input;
         try {
+            JSON_REWRITING.set(Boolean.TRUE);
             JSONObject root = new JSONObject(text);
             JSONObject data = root.optJSONObject("data");
             if (data == null) return input;
@@ -148,6 +188,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
         } catch (Throwable t) {
             XposedBridge.log("[MIUI Google Search Hook] JSON skipped: " + t);
             return input;
+        } finally {
+            JSON_REWRITING.remove();
         }
     }
 
@@ -178,8 +220,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 if ("current_engine".equals(key) || "common_setting_engine".equals(key)) {
                     param.args[1] = "google";
                 } else if ("client_scene_info".equals(key) && param.args[1] instanceof String) {
-                    param.args[1] = ((String) param.args[1]).replace(
-                            "&quot;b&quot;:&quot;baidu&quot;", "&quot;b&quot;:&quot;google&quot;");
+                    param.args[1] = rewriteClientSceneInfo((String) param.args[1]);
                 }
             }
         };
@@ -198,19 +239,28 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     JSONObject.class, String.class,
                     new XC_MethodHook() {
                         @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            if (param.args[0] instanceof String) {
-                                String source = (String) param.args[0];
-                                if (source.contains("searchEngineName") && source.contains("360")) {
-                                    byte[] rewritten = rewriteSearchConfig(
-                                            source.getBytes(StandardCharsets.UTF_8));
-                                    param.args[0] = new String(rewritten, StandardCharsets.UTF_8);
-                                    XposedBridge.log("[MIUI Google Search Hook] JSON read rewritten");
-                                }
+                            if (Boolean.TRUE.equals(JSON_REWRITING.get())) return;
+                            if (!(param.args[0] instanceof String)) return;
+                            String source = (String) param.args[0];
+                            if (!source.contains("searchEngineName") || !source.contains("360")) return;
+                            byte[] rewritten = rewriteSearchConfig(
+                                    source.getBytes(StandardCharsets.UTF_8));
+                            String rewrittenText = new String(rewritten, StandardCharsets.UTF_8);
+                            if (!source.equals(rewrittenText)) {
+                                param.args[0] = rewrittenText;
+                                XposedBridge.log("[MIUI Google Search Hook] JSON read rewritten");
                             }
                         }
                     });
         } catch (Throwable t) {
             XposedBridge.log("[MIUI Google Search Hook] JSON hook skipped: " + t);
         }
+    }
+
+    private static String rewriteClientSceneInfo(String source) {
+        String rewritten = source.replaceAll(
+                "(&quot;b&quot;\\s*:\\s*&quot;)[^&]*(&quot;)", "$1google$2");
+        return rewritten.replaceAll(
+                "(\\\"b\\\"\\s*:\\s*\\\")[^\\\"]*(\\\")", "$1google$2");
     }
 }
