@@ -1,3 +1,4 @@
 *.bak
 *.codexbak*
+work/
 .DS_Store

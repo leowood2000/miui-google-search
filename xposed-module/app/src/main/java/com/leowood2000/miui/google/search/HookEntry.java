@@ -40,6 +40,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             RAW_WRITE_METHOD = FileOutputStream.class.getDeclaredMethod(
                     "write", byte[].class, int.class, int.class);
             hookFileWrites();
+            hookJsonReads();
             hookPreferenceWrites();
             XposedBridge.log("[MIUI Google Search Hook] loaded");
         } catch (Throwable t) {
@@ -188,6 +189,28 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     "putString", String.class, String.class, hook);
         } catch (Throwable t) {
             XposedBridge.log("[MIUI Google Search Hook] preference hook skipped: " + t);
+        }
+    }
+
+    private static void hookJsonReads() {
+        try {
+            XposedHelpers.findAndHookConstructor(
+                    JSONObject.class, String.class,
+                    new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam param) {
+                            if (param.args[0] instanceof String) {
+                                String source = (String) param.args[0];
+                                if (source.contains("searchEngineName") && source.contains("360")) {
+                                    byte[] rewritten = rewriteSearchConfig(
+                                            source.getBytes(StandardCharsets.UTF_8));
+                                    param.args[0] = new String(rewritten, StandardCharsets.UTF_8);
+                                    XposedBridge.log("[MIUI Google Search Hook] JSON read rewritten");
+                                }
+                            }
+                        }
+                    });
+        } catch (Throwable t) {
+            XposedBridge.log("[MIUI Google Search Hook] JSON hook skipped: " + t);
         }
     }
 }
