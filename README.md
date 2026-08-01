@@ -41,3 +41,9 @@ adb connect DEVICE_IP:5555
 ## 注意
 
 小米组件会定期从服务器更新搜索引擎配置，直接修改应用数据可能被覆盖。需要长期保持时，可把修补脚本作为 KSU/Magisk 服务脚本的一部分，在网络和系统启动后重新执行。
+
+## LSPosed 拦截模块
+
+`xposed-module/` 是一个只作用于 `com.android.quicksearchbox` 的 LSPosed 模块。它在 `searchengineNew.json` 写入文件前改写云控内容，并拦截默认引擎 SharedPreferences 写入。模块不拦截其他应用，也不需要改动 QuickSearchBox APK。
+
+GitHub Actions 会构建未签名 APK，产物位于 Actions 的 artifact 中。安装后在 LSPosed 中启用模块，并只勾选 `com.android.quicksearchbox`，重启该应用或重启手机。
