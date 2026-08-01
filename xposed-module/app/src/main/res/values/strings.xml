@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">MIUI Google Search Hook</string>
+    <string name="app_description">Rewrite MIUI QuickSearchBox cloud search configuration to Google</string>
+</resources>
