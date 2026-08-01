@@ -28,7 +28,20 @@ jobs:
       - name: Build APK
         run: gradle --no-daemon :app:assembleRelease
         working-directory: xposed-module
+      - name: Sign APK for local installation
+        run: |
+          keytool -genkeypair -v \
+            -keystore /tmp/miui-google-search.jks \
+            -storepass android -keypass android \
+            -alias androiddebugkey \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks /tmp/miui-google-search.jks \
+            --ks-pass pass:android --key-pass pass:android \
+            --out xposed-module/app/build/outputs/apk/release/app-release-signed.apk \
+            xposed-module/app/build/outputs/apk/release/app-release-unsigned.apk
       - uses: actions/upload-artifact@v4
         with:
           name: miui-google-search-hook
-          path: xposed-module/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: xposed-module/app/build/outputs/apk/release/app-release-signed.apk
